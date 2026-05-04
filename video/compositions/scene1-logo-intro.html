@@ -1,0 +1,148 @@
+<template id="scene1-logo-intro-template">
+  <div
+    id="scene1-logo-intro"
+    data-composition-id="scene1-logo-intro"
+    data-width="1920"
+    data-height="1080"
+    data-duration="2.5"
+  >
+    <div class="canvas">
+      <!-- Ambient blue glow -->
+      <div class="bg-glow"></div>
+
+      <!-- Horizontal sweep line -->
+      <div class="sweep-line"></div>
+
+      <!-- Wordmark: DYNAMOUS -->
+      <div class="logo-container">
+        <div class="logo-letters">
+          <span class="ltr l0">D</span><span class="ltr l1">Y</span><span class="ltr l2">N</span><span class="ltr l3">A</span><span class="ltr l4">M</span><span class="ltr l5">O</span><span class="ltr l6">U</span><span class="ltr l7">S</span>
+        </div>
+        <div class="logo-rule"></div>
+        <div class="logo-sub">AI MASTERY</div>
+      </div>
+    </div>
+
+    <style>
+      #scene1-logo-intro .canvas {
+        width: 1920px;
+        height: 1080px;
+        background: #09090B;
+        position: relative;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      #scene1-logo-intro .bg-glow {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%) scale(0);
+        width: 900px;
+        height: 900px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(0,128,255,0.18) 0%, rgba(9,9,11,0) 70%);
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      #scene1-logo-intro .sweep-line {
+        position: absolute;
+        top: 50%;
+        left: -2000px;
+        width: 1920px;
+        height: 2px;
+        background: linear-gradient(90deg, transparent 0%, #0080FF 40%, #60A5FA 60%, transparent 100%);
+        transform: translateY(-50%);
+        pointer-events: none;
+      }
+
+      #scene1-logo-intro .logo-container {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+        z-index: 2;
+      }
+
+      #scene1-logo-intro .logo-letters {
+        display: flex;
+        align-items: baseline;
+      }
+
+      #scene1-logo-intro .ltr {
+        font-family: "Inter", sans-serif;
+        font-size: 148px;
+        font-weight: 800;
+        color: #FAFAFA;
+        letter-spacing: -3px;
+        opacity: 0;
+        transform: translateY(80px);
+        display: inline-block;
+      }
+
+      #scene1-logo-intro .logo-rule {
+        width: 0px;
+        height: 3px;
+        background: linear-gradient(90deg, #0080FF, #3B82F6, #60A5FA);
+        border-radius: 2px;
+        opacity: 0;
+      }
+
+      #scene1-logo-intro .logo-sub {
+        font-family: "Inter", sans-serif;
+        font-size: 26px;
+        font-weight: 600;
+        color: #3B82F6;
+        letter-spacing: 14px;
+        opacity: 0;
+        transform: translateY(12px);
+      }
+    </style>
+
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script>
+      (function () {
+        const tl = gsap.timeline({ paused: true });
+
+        const letters = document.querySelectorAll('#scene1-logo-intro .ltr');
+        const bgGlow  = document.querySelector('#scene1-logo-intro .bg-glow');
+        const sweep   = document.querySelector('#scene1-logo-intro .sweep-line');
+        const rule    = document.querySelector('#scene1-logo-intro .logo-rule');
+        const sub     = document.querySelector('#scene1-logo-intro .logo-sub');
+        const cont    = document.querySelector('#scene1-logo-intro .logo-container');
+
+        // Sweep line shoots across
+        tl.to(sweep, { left: '2000px', duration: 0.45, ease: 'power3.in' }, 0);
+
+        // Letters fly up with stagger
+        tl.to(letters, {
+          opacity: 1,
+          y: 0,
+          duration: 0.55,
+          stagger: 0.045,
+          ease: 'back.out(1.4)',
+        }, 0.1);
+
+        // Glow blooms on impact
+        tl.to(bgGlow, { opacity: 1, scale: 1, duration: 0.6, ease: 'power2.out' }, 0.35);
+
+        // Blue rule expands
+        tl.to(rule, { opacity: 1, width: 820, duration: 0.5, ease: 'power3.out' }, 0.7);
+
+        // Subtitle rises in
+        tl.to(sub, { opacity: 1, y: 0, duration: 0.45, ease: 'power2.out' }, 0.85);
+
+        // Hold, then contract out
+        tl.to(cont, { scale: 0.85, opacity: 0, duration: 0.4, ease: 'power3.in' }, 2.0);
+        tl.to(bgGlow, { opacity: 0, duration: 0.4, ease: 'power2.in' }, 2.0);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines['scene1-logo-intro'] = tl;
+      })();
+    </script>
+  </div>
+</template>
