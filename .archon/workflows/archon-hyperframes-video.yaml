@@ -1,0 +1,345 @@
+name: archon-hyperframes-video
+description: |
+  Use when: User wants to generate or modify a HyperFrames video using HeyGen's AI pipeline.
+  Triggers: "create hyperframe video", "hyperframes video", "website to video",
+            "heygen video", "hyperframes", "website video".
+  Does: Installs HyperFrames skill if needed -> captures website assets -> runs AI pipeline
+        (Design, Script, Storyboard, VO+Timing, Build, Validate) -> previews output ->
+        renders final MP4 video -> summarizes the result.
+  Requires: Node.js / npx available in PATH.
+  Arguments: pass the request as natural language including the URL.
+             Optional inline flags (anywhere in the message):
+               --type=social-ad|product-launch|product-tour|brand-reel|feature-announcement|teaser
+               --creative="bold cinematic dark theme"
+               --output=hyperframes-output
+  Optional: Set GEMINI_API_KEY env var for enhanced AI vision analysis (~$0.04/capture).
+
+nodes:
+  # ── Layer 0: Validate args and set up working directory ──────────────────
+  - id: setup
+    bash: |
+      ARGS='$ARGUMENTS'
+
+      # Extract URL (first http(s) URL anywhere in the message)
+      URL=$(printf '%s\n' "$ARGS" | grep -oE 'https?://[^[:space:]]+' | head -1)
+
+      # Optional inline flags: --type=, --creative=, --output=
+      VIDEO_TYPE=$(printf '%s\n' "$ARGS" | grep -oE '\-\-type=[^[:space:]]+' | head -1 | cut -d= -f2-)
+      CREATIVE=$(printf '%s\n' "$ARGS" | grep -oE '\-\-creative="[^"]+"' | head -1 | sed -E 's/^--creative=//; s/^"//; s/"$//')
+      OUTPUT_NAME=$(printf '%s\n' "$ARGS" | grep -oE '\-\-output=[^[:space:]]+' | head -1 | cut -d= -f2-)
+
+      # Defaults
+      : "${VIDEO_TYPE:=product-launch}"
+      : "${CREATIVE:=bold, cinematic}"
+      : "${OUTPUT_NAME:=hyperframes-output}"
+
+      PROJECT_DIR="$ARTIFACTS_DIR"
+
+      if [ -z "$URL" ]; then
+        echo "ERROR: No URL found in the request. Include an http(s):// URL."
+        echo "Example: 'create a 10s promo video about https://dynamous.ai/'"
+        exit 1
+      fi
+
+      mkdir -p "$PROJECT_DIR"
+
+      echo "URL=$URL"
+      echo "CREATIVE=$CREATIVE"
+      echo "VIDEO_TYPE=$VIDEO_TYPE"
+      echo "OUTPUT_NAME=$OUTPUT_NAME"
+      echo "PROJECT_DIR=$PROJECT_DIR"
+      echo "SETUP_OK"
+    timeout: 10000
+
+  # ── Layer 1: Check/install HyperFrames skill ──────────────────────────────
+  - id: install-skill
+    bash: |
+      # Pick npx (preferred) or fall back to bunx (Bun's npm runner)
+      if command -v npx >/dev/null 2>&1; then
+        NPX="npx"
+      elif command -v bunx >/dev/null 2>&1; then
+        NPX="bunx"
+      else
+        echo "ERROR: Neither npx nor bunx is available in PATH. Install Node.js or Bun in the runtime."
+        exit 1
+      fi
+      echo "Using runner: $NPX"
+
+      if $NPX hyperframes --version >/dev/null 2>&1; then
+        echo "HyperFrames already installed: $($NPX hyperframes --version 2>/dev/null || echo 'version unknown')"
+        echo "SKILL_READY"
+      else
+        echo "Installing HyperFrames skill..."
+        $NPX skills add heygen-com/hyperframes
+        RESULT=$?
+        if [ $RESULT -eq 0 ]; then
+          echo "SKILL_INSTALLED"
+        else
+          echo "ERROR: Failed to install HyperFrames skill. Check your network connection."
+          exit 1
+        fi
+      fi
+    depends_on: [setup]
+    timeout: 120000
+
+  # ── Layer 2: Capture website assets ───────────────────────────────────────
+  - id: capture
+    bash: |
+      NPX=$(command -v npx || command -v bunx)
+      [ -n "$NPX" ] || { echo "ERROR: Neither npx nor bunx is available in PATH."; exit 1; }
+
+      SETUP_OUTPUT=$setup.output
+      URL=$(printf '%s\n' "$SETUP_OUTPUT" | grep '^URL=' | cut -d= -f2-)
+      PROJECT_DIR=$(printf '%s\n' "$SETUP_OUTPUT" | grep '^PROJECT_DIR=' | cut -d= -f2-)
+
+      cd "$PROJECT_DIR"
+
+      echo "Capturing assets from: $URL"
+      echo "This may take up to 2 minutes for complex sites..."
+
+      if [ -n "$GEMINI_API_KEY" ]; then
+        echo "Gemini vision analysis enabled."
+      fi
+
+      "$NPX" hyperframes capture "$URL" --timeout 120000
+      RESULT=$?
+
+      if [ $RESULT -eq 0 ]; then
+        echo ""
+        echo "CAPTURE_SUCCESS"
+        ls -la 2>/dev/null | head -20
+      else
+        echo "CAPTURE_FAILED: Could not capture website. Check if the URL is accessible."
+        exit 1
+      fi
+    depends_on: [install-skill]
+    timeout: 180000
+
+  # ── Layer 3: Scaffold a HyperFrames project ───────────────────────────────
+  # `hyperframes init` creates the canonical project layout (compositions/, index.html,
+  # package.json, hyperframes.json, assets/) that `render` expects. Without this step
+  # the artifacts dir contains only captures/ and render has nothing to compile.
+  - id: scaffold
+    bash: |
+      NPX=$(command -v npx || command -v bunx)
+      [ -n "$NPX" ] || { echo "ERROR: Neither npx nor bunx is available in PATH."; exit 1; }
+
+      SETUP_OUTPUT=$setup.output
+      PROJECT_DIR=$(printf '%s\n' "$SETUP_OUTPUT" | grep '^PROJECT_DIR=' | cut -d= -f2-)
+      VIDEO_TYPE=$(printf '%s\n' "$SETUP_OUTPUT" | grep '^VIDEO_TYPE=' | cut -d= -f2-)
+
+      # Pick a starter example based on the requested video type. `product-promo`
+      # is the closest match for product-launch / feature-announcement / teaser.
+      case "$VIDEO_TYPE" in
+        product-launch|product-tour|feature-announcement|teaser|social-ad)
+          EXAMPLE=product-promo ;;
+        brand-reel)
+          EXAMPLE=swiss-grid ;;
+        *)
+          EXAMPLE=blank ;;
+      esac
+
+      cd "$PROJECT_DIR"
+
+      # If a previous run already scaffolded `video/`, leave it alone.
+      if [ -d video ] && [ -f video/index.html ]; then
+        echo "SCAFFOLD_EXISTS"
+      else
+        echo "Scaffolding HyperFrames project (example=$EXAMPLE)..."
+        "$NPX" hyperframes init video --non-interactive --example "$EXAMPLE" --skip-skills 2>&1
+        RESULT=$?
+        if [ $RESULT -ne 0 ]; then
+          echo "ERROR: hyperframes init failed (exit $RESULT)."
+          exit 1
+        fi
+      fi
+
+      echo ""
+      echo "Project layout:"
+      ls -la video/ 2>/dev/null
+      echo ""
+      echo "Compositions:"
+      ls -la video/compositions/ 2>/dev/null
+      echo ""
+      echo "VIDEO_DIR=$PROJECT_DIR/video"
+      echo "SCAFFOLD_OK"
+    depends_on: [capture]
+    timeout: 60000
+
+  # ── Layer 4: Author the composition (AI step, explicit tools) ─────────────
+  # The AI reads captured brand assets + the scaffolded project, then edits
+  # compositions/*.html and index.html so the rendered video matches the brand.
+  - id: author
+    prompt: |
+      You are authoring a HyperFrames video composition. You have these tools and
+      MUST use them — do NOT just describe what you would do, actually do it:
+      Bash, Read, Write, Edit, Grep, Glob.
+
+      Setup details:
+      $setup.output
+
+      Capture result:
+      $capture.output
+
+      Scaffold result:
+      $scaffold.output
+
+      ## What's on disk
+
+      The setup output gives you `PROJECT_DIR`. Inside it:
+      - `captures/<slug>/` — captured website data:
+          * `CLAUDE.md` — brand summary (colors, fonts, libraries)
+          * `extracted/tokens.json` — design tokens
+          * `extracted/visible-text.txt` — page copy in DOM order
+          * `extracted/asset-descriptions.md` — one-line description of each asset
+          * `screenshots/scroll-*.png` — viewport screenshots
+          * `assets/` — downloaded images, SVGs, fonts
+      - `video/` — scaffolded HyperFrames project:
+          * `index.html` — top-level composition manifest
+          * `compositions/*.html` — per-scene HTML/CSS/GSAP
+          * `hyperframes.json` — project config
+          * `package.json` — local scripts (preview, render)
+          * `CLAUDE.md` / `AGENTS.md` — skill guidance for editing
+
+      ## What to do (run the steps with Bash/Read/Edit, in order)
+
+      1. Read `video/CLAUDE.md` and `video/AGENTS.md` — they describe the canonical
+         editing workflow for this scaffold.
+      2. Read `captures/*/CLAUDE.md` and `captures/*/extracted/tokens.json` — extract
+         the real brand colors, fonts, and key copy.
+      3. Read `video/index.html` and each `video/compositions/*.html` so you know
+         the existing structure (timing, scene IDs, GSAP timeline keys).
+      4. Use `Edit` to update each composition's text, colors, fonts, and key visuals
+         to match the captured brand. Keep the existing scene structure and
+         `data-composition-id` attributes intact — only change content/styling.
+      5. Adjust scene durations in `video/index.html` so the total runtime matches
+         the target duration:
+            social-ad: 10-15s | product-launch: 20-30s | product-tour: 30-60s
+            brand-reel: 15-30s | feature-announcement: 15-25s | teaser: 8-15s
+      6. Validate with bash:
+            cd $PROJECT_DIR/video && bunx hyperframes lint
+         If `lint` reports errors (not warnings), fix them with Edit and re-run lint.
+      7. End your turn with a short summary of which files you edited and the
+         total composed duration.
+
+      ## Constraints
+      - Do NOT run `hyperframes render` or `hyperframes preview` — separate
+        downstream nodes handle those.
+      - Do NOT regenerate the project with `hyperframes init` — it's already scaffolded.
+      - If you cannot determine a brand color or font from the capture, fall back to
+        the values in `house-style.md` (referenced in the hyperframes skill docs) or
+        a high-contrast neutral palette — do not invent fictional brand identities.
+    allowed_tools:
+      - Bash
+      - Read
+      - Write
+      - Edit
+      - Grep
+      - Glob
+    depends_on: [scaffold]
+
+  # ── Layer 5: Preview / lint compositions ──────────────────────────────────
+  # `hyperframes preview` starts an HTTP studio that does not exit, so it is
+  # unsuitable for a workflow node. Use `lint` for a deterministic check instead.
+  - id: preview
+    bash: |
+      NPX=$(command -v npx || command -v bunx)
+      [ -n "$NPX" ] || { echo "ERROR: Neither npx nor bunx is available in PATH."; exit 1; }
+
+      SETUP_OUTPUT=$setup.output
+      PROJECT_DIR=$(printf '%s\n' "$SETUP_OUTPUT" | grep '^PROJECT_DIR=' | cut -d= -f2-)
+      cd "$PROJECT_DIR/video"
+
+      echo "Linting compositions..."
+      "$NPX" hyperframes lint 2>&1
+      RESULT=$?
+
+      if [ $RESULT -eq 0 ]; then
+        echo ""
+        echo "PREVIEW_SUCCESS"
+      else
+        echo ""
+        echo "PREVIEW_WARNING: Lint reported issues, attempting render anyway."
+        echo "PREVIEW_PARTIAL"
+      fi
+    depends_on: [author]
+    timeout: 60000
+
+  # ── Layer 6: Render final video ────────────────────────────────────────────
+  - id: render
+    bash: |
+      NPX=$(command -v npx || command -v bunx)
+      [ -n "$NPX" ] || { echo "ERROR: Neither npx nor bunx is available in PATH."; exit 1; }
+
+      SETUP_OUTPUT=$setup.output
+      PROJECT_DIR=$(printf '%s\n' "$SETUP_OUTPUT" | grep '^PROJECT_DIR=' | cut -d= -f2-)
+      OUTPUT_NAME=$(printf '%s\n' "$SETUP_OUTPUT" | grep '^OUTPUT_NAME=' | cut -d= -f2-)
+      OUTPUT_FILE="../${OUTPUT_NAME}.mp4"
+
+      cd "$PROJECT_DIR/video"
+
+      echo "Rendering final video to: $PROJECT_DIR/${OUTPUT_NAME}.mp4"
+      "$NPX" hyperframes render --output "$OUTPUT_FILE" 2>&1
+      RESULT=$?
+
+      if [ $RESULT -eq 0 ]; then
+        echo ""
+        echo "RENDER_SUCCESS"
+        ls -la "$PROJECT_DIR/${OUTPUT_NAME}.mp4" 2>/dev/null || echo "(output file info unavailable)"
+      else
+        echo "RENDER_FAILED: Video render did not complete. Check $PROJECT_DIR/video/compositions/ for partial output."
+        exit 1
+      fi
+    depends_on: [preview]
+    timeout: 300000
+
+  # ── Layer 7: Take key-frame snapshots ─────────────────────────────────────
+  - id: snapshot
+    bash: |
+      NPX=$(command -v npx || command -v bunx)
+      [ -n "$NPX" ] || { echo "ERROR: Neither npx nor bunx is available in PATH."; exit 1; }
+
+      SETUP_OUTPUT=$setup.output
+      PROJECT_DIR=$(printf '%s\n' "$SETUP_OUTPUT" | grep '^PROJECT_DIR=' | cut -d= -f2-)
+
+      cd "$PROJECT_DIR/video"
+
+      echo "Extracting key-frame snapshots..."
+      # Snapshot the project at default key frames (covers each scene).
+      "$NPX" hyperframes snapshot 2>&1 || \
+        echo "SNAPSHOT_SKIPPED: Snapshot extraction failed (non-critical)"
+
+      ls -la snapshots/ 2>/dev/null || echo "(no snapshots directory)"
+      echo "SNAPSHOT_DONE"
+    depends_on: [render]
+    timeout: 120000
+
+  # ── Layer 7: Summary ───────────────────────────────────────────────────────
+  - id: summary
+    prompt: |
+      A HyperFrames video was generated from a website.
+
+      Original request:
+      $ARGUMENTS
+
+      Setup: $setup.output
+      Capture: $capture.output
+      Scaffold: $scaffold.output
+      Authoring: $author.output
+      Lint/Preview: $preview.output
+      Render: $render.output
+      Snapshots: $snapshot.output
+
+      Summarize the result for the user:
+      1. The source URL and creative direction used
+      2. The video type and target duration
+      3. Whether all pipeline steps completed successfully
+      4. Where the output video file is located ($PROJECT_DIR/<output-name>.mp4)
+      5. Any key-frame snapshots produced ($PROJECT_DIR/video/snapshots/)
+      6. How to iterate: edit files under $PROJECT_DIR/video/compositions/ and rerun
+         `bunx hyperframes render` from $PROJECT_DIR/video, or run
+         `bunx hyperframes capture <url>` again to refresh the source assets.
+
+      If any steps failed, explain what went wrong and suggest remediation steps.
+    depends_on: [snapshot]
+    model: haiku
